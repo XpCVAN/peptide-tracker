@@ -48,14 +48,14 @@ self.addEventListener('fetch', (event) => {
 // This lets the notification fire even if the page is in the background.
 self.addEventListener('message', (event) => {
     if (event.data?.type === 'SHOW_NOTIFICATION') {
-        const { title, body, tag, icon } = event.data;
+        const { title, body, tag } = event.data;
         self.registration.showNotification(title, {
             body,
-            icon: icon || '/icon-192.png',
-            badge: '/icon-192.png',
+            icon: 'icon-192.png',
+            badge: 'icon-192.png',
             tag,
-            requireInteraction: false,
-            vibrate: [200, 100, 200],
+            requireInteraction: true, // Keep until user acknowledges
+            vibrate: [200, 100, 200, 100, 200], // Stronger pattern
             data: { url: '/' }
         });
     }

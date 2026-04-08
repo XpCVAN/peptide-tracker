@@ -202,6 +202,62 @@ function startApp() {
     document.querySelector('.settings-btn')?.addEventListener('click', showSettingsModal);
 }
 
+function initNotifications() {
+    if ('Notification' in window) {
+        if (Notification.permission === 'default') {
+            // Subtle delayed request
+            setTimeout(() => {
+                Notification.requestPermission();
+            }, 5000);
+        }
+    }
+    
+    // Check reminders every minute
+    setInterval(checkReminders, 60000);
+    checkReminders(); // Initial check
+}
+
+function checkReminders() {
+    if (!state.settings.notificationsEnabled || Notification.permission !== 'granted') return;
+    
+    const now = new Date();
+    const pins = generateScheduleForDate(now);
+    const dayKey = now.toISOString().split('T')[0];
+    
+    pins.forEach(p => {
+        // Find if this timing has a specific time set
+        const timeStr = state.settings.notificationTimes[p.timing] || "08:00";
+        const [h, m] = timeStr.split(':').map(Number);
+        
+        const targetTime = new Date(now);
+        targetTime.setHours(h, m, 0, 0);
+        
+        // Notify if we are within 5 minutes of the target time or just past it (up to 30 mins)
+        const diffMins = (now - targetTime) / (1000 * 60);
+        
+        // Unique ID for this specific notification event
+        const notifyKey = `notify_${dayKey}_${p.name}_${p.timing}`;
+        
+        if (diffMins >= -5 && diffMins < 30 && state.lastNotified !== notifyKey) {
+            const body = state.settings.discreetMode 
+                ? "Laboratory administration window is open." 
+                : `Time for your ${p.dosage} ${p.name} pinning.`;
+            
+            if (navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({
+                    type: 'SHOW_NOTIFICATION',
+                    title: 'Dose Reminder',
+                    body: body,
+                    tag: p.id
+                });
+                
+                state.lastNotified = notifyKey;
+                localStorage.setItem('settings', JSON.stringify(state.settings)); // Persist lastNotified
+            }
+        }
+    });
+}
+
 function initRipples() {
     document.addEventListener('click', (e) => {
         const target = e.target.closest('.ripple');
@@ -622,7 +678,24 @@ function renderCalendar(container) {
 }
 
 function renderAssistant(container) {
+    const hasKey = !!state.settings.apiKey;
     container.innerHTML = `
+        ${!hasKey ? `
+        <div onclick="showAISetupGuide()" class="glass-card ripple" style="display: flex; align-items: center; gap: 14px; padding: 16px; margin-bottom: 16px; cursor: pointer; border: 1px dashed rgba(0, 242, 254, 0.3); background: rgba(0, 242, 254, 0.04);">
+            <div style="font-size: 1.6rem; flex-shrink: 0;">🔗</div>
+            <div style="flex: 1;">
+                <div style="font-weight: 700; font-size: 0.9rem; color: var(--accent); margin-bottom: 2px;">Connect Gemini AI</div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary); line-height: 1.4;">Tap to set up your API key and unlock the research assistant.</div>
+            </div>
+            <svg width="7" height="12" viewBox="0 0 7 12" fill="none" style="opacity:0.4; flex-shrink:0;"><path d="M1 1l5 5-5 5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        ` : `
+        <div onclick="showAISetupGuide()" class="glass-card ripple" style="display: flex; align-items: center; gap: 14px; padding: 12px 16px; margin-bottom: 16px; cursor: pointer; border: 1px solid rgba(0, 255, 150, 0.2); background: rgba(0, 255, 150, 0.04);">
+            <div style="font-size: 1.2rem;">✅</div>
+            <div style="flex: 1; font-size: 0.8rem; color: rgba(255,255,255,0.5);">Gemini AI connected · Tap to manage</div>
+            <svg width="7" height="12" viewBox="0 0 7 12" fill="none" style="opacity:0.3;"><path d="M1 1l5 5-5 5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        `}
         <div class="glass-card chat-window">
             <div class="chat-messages" id="chat-messages">
                 <div class="message ai">Hello ${state.settings.userName}. I am the Peptide AI Research system. I have indexed your current protocols and administration windows. How can I assist your laboratory work today?</div>
@@ -637,6 +710,104 @@ function renderAssistant(container) {
         </div>
     `;
 }
+
+window.showAISetupGuide = function(step = 1) {
+    const modal = document.getElementById('modal-container');
+    const modalContent = modal.querySelector('.modal-content');
+    modal.classList.remove('hidden');
+
+    const steps = [
+        {
+            icon: '🔑',
+            title: 'Get Your Gemini API Key',
+            body: `
+                <p style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.6; margin-bottom: 20px;">PeptAI uses Google's Gemini AI. You'll need a free API key to enable the research assistant.</p>
+                <div class="glass-card" style="padding: 16px; border-radius: 14px; background: rgba(255,255,255,0.03); margin-bottom: 8px;">
+                    <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px;">Steps</div>
+                    <div style="display: flex; flex-direction: column; gap: 12px; font-size: 0.88rem; line-height: 1.5;">
+                        <div style="display: flex; gap: 10px;"><span style="color: var(--accent); font-weight: 700; flex-shrink:0;">1.</span> Visit <strong style="color:#fff;">aistudio.google.com</strong></div>
+                        <div style="display: flex; gap: 10px;"><span style="color: var(--accent); font-weight: 700; flex-shrink:0;">2.</span> Sign in with your Google account</div>
+                        <div style="display: flex; gap: 10px;"><span style="color: var(--accent); font-weight: 700; flex-shrink:0;">3.</span> Click <strong style="color:#fff;">"Get API Key"</strong> → <strong style="color:#fff;">"Create API Key"</strong></div>
+                        <div style="display: flex; gap: 10px;"><span style="color: var(--accent); font-weight: 700; flex-shrink:0;">4.</span> Copy the key (it starts with "AIza...")</div>
+                    </div>
+                </div>
+                <p style="font-size: 0.7rem; color: rgba(255,255,255,0.25); margin-top: 12px; line-height: 1.5;">💡 The free tier includes 1,500 requests/day — more than enough for daily use.</p>
+            `
+        },
+        {
+            icon: '📋',
+            title: 'Paste Your API Key',
+            body: `
+                <p style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.6; margin-bottom: 20px;">Now link your key to PeptAI.</p>
+                <div class="glass-card" style="padding: 16px; border-radius: 14px; background: rgba(255,255,255,0.03); margin-bottom: 8px;">
+                    <div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px;">Steps</div>
+                    <div style="display: flex; flex-direction: column; gap: 12px; font-size: 0.88rem; line-height: 1.5;">
+                        <div style="display: flex; gap: 10px;"><span style="color: var(--accent); font-weight: 700; flex-shrink:0;">1.</span> Tap <strong style="color:#fff;">"Open Settings"</strong> below</div>
+                        <div style="display: flex; gap: 10px;"><span style="color: var(--accent); font-weight: 700; flex-shrink:0;">2.</span> Find the <strong style="color:#fff;">API Key</strong> field under System Access</div>
+                        <div style="display: flex; gap: 10px;"><span style="color: var(--accent); font-weight: 700; flex-shrink:0;">3.</span> Paste your key and tap <strong style="color:#fff;">"Apply Settings"</strong></div>
+                    </div>
+                </div>
+                <div style="background: rgba(0, 242, 254, 0.06); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 14px; margin-top: 12px; font-size: 0.8rem; color: rgba(255,255,255,0.6); line-height: 1.5;">
+                    🔒 Your key is stored <strong style="color:#fff;">only on this device</strong> and is never sent to our servers.
+                </div>
+            `
+        },
+        {
+            icon: '🧬',
+            title: 'Ready to Research',
+            body: `
+                <p style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.6; margin-bottom: 24px;">Once connected, you can ask the assistant about:</p>
+                <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 24px;">
+                    ${[
+                        ['💊', 'Optimal dosing windows for your compounds'],
+                        ['📈', 'How to interpret your pharmacokinetic graphs'],
+                        ['⚡', 'Interaction risks between stacked peptides'],
+                        ['🔬', 'Research literature context for any compound']
+                    ].map(([icon, text]) => `
+                        <div style="display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: rgba(255,255,255,0.03); border-radius: 12px; font-size: 0.85rem; color: rgba(255,255,255,0.75);">
+                            <span style="font-size: 1.1rem;">${icon}</span> ${text}
+                        </div>
+                    `).join('')}
+                </div>
+            `
+        }
+    ];
+
+    const s = steps[step - 1];
+    const isLast = step === steps.length;
+    const progress = (step / steps.length) * 100;
+
+    modalContent.innerHTML = `
+        <div style="padding: 5px;">
+            <div class="wizard-progress"><div class="wizard-progress-fill" style="width: ${progress}%"></div></div>
+            <div style="position: absolute; top: 16px; right: 20px; z-index: 30;">
+                <button onclick="closeModal()" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; width: 32px; height: 32px; color: #fff; cursor: pointer; display:flex; align-items:center; justify-content:center;">✕</button>
+            </div>
+
+            <div style="text-align: center; padding: 30px 0 20px;">
+                <div style="font-size: 3rem; margin-bottom: 10px;">${s.icon}</div>
+                <div style="font-size: 0.6rem; color: var(--accent); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px;">Step ${step} of ${steps.length}</div>
+                <h3 style="margin: 0; font-size: 1.1rem; color: #fff;">${s.title}</h3>
+            </div>
+
+            ${s.body}
+
+            <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 10px;">
+                ${isLast ? `
+                    <button onclick="closeModal(); showSettingsModal();" style="width: 100%; padding: 16px; background: var(--accent); border: none; border-radius: 14px; color: #000; font-weight: 700; font-size: 1rem; cursor: pointer;" class="ripple">Open Settings to Add Key</button>
+                ` : step === 2 ? `
+                    <button onclick="showAISetupGuide(${step + 1})" style="width: 100%; padding: 16px; background: var(--accent); border: none; border-radius: 14px; color: #000; font-weight: 700; font-size: 1rem; cursor: pointer;" class="ripple">Next</button>
+                    <button onclick="closeModal(); showSettingsModal();" style="width: 100%; padding: 14px; background: rgba(255,255,255,0.05); border: none; border-radius: 14px; color: #fff; font-weight: 600; font-size: 0.9rem; cursor: pointer;" class="ripple">Open Settings Now</button>
+                ` : `
+                    <button onclick="showAISetupGuide(${step + 1})" style="width: 100%; padding: 16px; background: var(--accent); border: none; border-radius: 14px; color: #000; font-weight: 700; font-size: 1rem; cursor: pointer;" class="ripple">Next</button>
+                `}
+                ${step > 1 ? `
+                    <button onclick="showAISetupGuide(${step - 1})" style="width: 100%; padding: 14px; background: none; border: none; color: rgba(255,255,255,0.3); font-size: 0.85rem; cursor: pointer;">← Back</button>
+                ` : ''}
+            </div>
+        </div>
+    `;
+};
 
 // --- Modals ---
 function showAddPeptideModal(editIndex = -1) {
@@ -665,11 +836,11 @@ function showAddPeptideModal(editIndex = -1) {
         const progress = (currentStep / 5) * 100;
         
         modalContent.innerHTML = `
-            <div style="position: absolute; top: 20px; right: 20px; z-index: 10;">
-                <button class="chat-input ripple" onclick="closeModal()" style="border: none; background: rgba(255,255,255,0.05); width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding: 0;">✕</button>
-            </div>
             <div class="wizard-progress"><div class="wizard-progress-fill" style="width: ${progress}%"></div></div>
-            <div class="wizard-container">
+            <div style="position: absolute; top: 16px; right: 20px; z-index: 30;">
+                <button class="chat-input ripple" onclick="closeModal()" style="border: none; background: rgba(255,255,255,0.08); width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding: 0; color: #fff;">✕</button>
+            </div>
+            <div class="wizard-container" style="padding-top: 15px;">
                 ${renderStepContent()}
             </div>
             <div class="wizard-nav">
@@ -776,10 +947,10 @@ function showAddPeptideModal(editIndex = -1) {
                     
                     <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 10px;">Administration Slots</label>
                     <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 25px;">
+                        <label class="timing-opt"><input type="checkbox" value="Morning" ${wizardData.timings.includes('Morning') ? 'checked' : ''}> 🌅<span>Morning</span></label>
+                        <label class="timing-opt"><input type="checkbox" value="Afternoon" ${wizardData.timings.includes('Afternoon') ? 'checked' : ''}> ☀️<span>Afternoon</span></label>
+                        <label class="timing-opt"><input type="checkbox" value="Evening" ${wizardData.timings.includes('Evening') ? 'checked' : ''}> 🌙<span>Evening</span></label>
                         <label class="timing-opt"><input type="checkbox" value="Night" ${wizardData.timings.includes('Night') ? 'checked' : ''}> 🌌<span>Night</span></label>
-                        <label class="timing-opt"><input type="checkbox" value="Morning" ${wizardData.timings.includes('Morning') ? 'checked' : ''}> 🌅<span>AM</span></label>
-                        <label class="timing-opt"><input type="checkbox" value="Afternoon" ${wizardData.timings.includes('Afternoon') ? 'checked' : ''}> ☀️<span>Mid</span></label>
-                        <label class="timing-opt"><input type="checkbox" value="Evening" ${wizardData.timings.includes('Evening') ? 'checked' : ''}> 🌙<span>PM</span></label>
                     </div>
 
                     <label style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 10px;">Sequence Start Date</label>
@@ -926,7 +1097,8 @@ function showSettingsModal() {
     const modal = document.getElementById('modal-container');
     const modalContent = modal.querySelector('.modal-content');
     modal.classList.remove('hidden');
-    const times = state.settings.notificationTimes || { Morning: '08:00', Afternoon: '13:00', Evening: '20:00' };
+    const defaultTimes = { Night: '04:00', Morning: '08:00', Afternoon: '13:00', Evening: '20:00' };
+    const times = { ...defaultTimes, ...state.settings.notificationTimes };
     modalContent.innerHTML = `
         <div style="padding: 5px;">
             <div style="text-align: center; margin-bottom: 25px;">
@@ -957,9 +1129,9 @@ function showSettingsModal() {
                 </div>
                 <div id="alert-times-section" style="display: ${state.settings.notificationsEnabled ? 'block' : 'none'}; border-top: 1px solid rgba(255,255,255,0.05);">
                     <div style="padding: 14px 16px 6px; font-size: 0.6rem; color: rgba(255,255,255,0.35); text-transform: uppercase; letter-spacing: 1px;">Alert Windows</div>
-                    ${['Night', 'Morning', 'Afternoon', 'Evening'].map((win, idx) => {
-                        const icons = ['🌌', '🌅', '☀️', '🌙'];
-                        const labels = ['Night', 'AM', 'Mid', 'PM'];
+                    ${['Morning', 'Afternoon', 'Evening', 'Night'].map((win, idx) => {
+                        const icons = ['🌅', '☀️', '🌙', '🌌'];
+                        const labels = ['Morning', 'Afternoon', 'Evening', 'Night'];
                         const t = times[win] || (win === 'Night' ? '04:00' : '08:00');
                         const [h, m] = t.split(':').map(Number);
                         const ampm = h >= 12 ? 'PM' : 'AM';
@@ -967,18 +1139,14 @@ function showSettingsModal() {
                         const display = `${h12}:${m.toString().padStart(2,'0')} ${ampm}`;
                         const isLast = idx === 3;
                         return `
-                        <div style="padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; ${!isLast ? 'border-bottom: 1px solid rgba(255,255,255,0.04);' : ''}">
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <span style="font-size: 1rem;">${icons[idx]}</span>
-                                <span style="font-size: 0.85rem; color: rgba(255,255,255,0.7);">${labels[idx]}</span>
-                            </div>
+                        <div onclick="showTimeAdjustModal('${win}')" style="padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; ${!isLast ? 'border-bottom: 1px solid rgba(255,255,255,0.04);' : ''} active:background: rgba(255,255,255,0.05);" class="ripple">
                             <div style="display: flex; align-items: center; gap: 10px;">
-                                <button onclick="stepTime('${win}', -30)" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; width: 32px; height: 32px; color: #fff; cursor: pointer; font-size: 1rem; display:flex; align-items:center; justify-content:center; flex-shrink:0;">−</button>
-                                <div style="position: relative; cursor: pointer; min-width: 80px; text-align:center;" onclick="document.getElementById('n-${win.toLowerCase()}-s').showPicker()">
-                                    <span style="font-size: 0.95rem; font-weight: 700; color: var(--accent);">${display}</span>
-                                    <input type="time" id="n-${win.toLowerCase()}-s" onchange="updateTime('${win}', this.value)" value="${t}" style="position:absolute; opacity:0; pointer-events:none; width:0; height:0;">
-                                </div>
-                                <button onclick="stepTime('${win}', 30)" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; width: 32px; height: 32px; color: #fff; cursor: pointer; font-size: 1rem; display:flex; align-items:center; justify-content:center; flex-shrink:0;">+</button>
+                                <span style="font-size: 1.1rem;">${icons[idx]}</span>
+                                <span style="font-size: 0.9rem; color: rgba(255,255,255,0.85);">${labels[idx]}</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span style="font-size: 0.9rem; font-weight: 600; color: var(--accent);">${display}</span>
+                                <svg width="7" height="12" viewBox="0 0 7 12" fill="none" style="opacity:0.35;"><path d="M1 1l5 5-5 5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             </div>
                         </div>`;
                     }).join('')}
@@ -1105,7 +1273,8 @@ window.showNotificationSettingsModal = function() {
     const modalContent = modal.querySelector('.modal-content');
     modal.classList.remove('hidden');
     
-    const times = state.settings.notificationTimes || { Morning: '08:00', Afternoon: '13:00', Evening: '20:00' };
+    const defaultTimes = { Night: '04:00', Morning: '08:00', Afternoon: '13:00', Evening: '20:00' };
+    const times = { ...defaultTimes, ...state.settings.notificationTimes };
 
     modalContent.innerHTML = `
         <div style="padding: 5px;">
@@ -1149,13 +1318,61 @@ window.updateTime = function(win, val) {
     // Refresh whatever settings view is currently open
     if (document.querySelector('h3')?.innerText.includes('Laboratory Settings')) {
         showSettingsModal();
+    } else if (document.querySelector('h3')?.innerText.includes('Adjust Time')) {
+        showTimeAdjustModal(win);
     } else {
         showNotificationSettingsModal();
     }
 };
 
+window.showTimeAdjustModal = function(win) {
+    const modal = document.getElementById('modal-container');
+    const modalContent = modal.querySelector('.modal-content');
+    modal.classList.remove('hidden');
+
+    const defaultTimes = { Night: '04:00', Morning: '08:00', Afternoon: '13:00', Evening: '20:00' };
+    const times = { ...defaultTimes, ...state.settings.notificationTimes };
+    const icons = { Night: '🌌', Morning: '🌅', Afternoon: '☀️', Evening: '🌙' };
+
+    const t = times[win];
+    const [h, m] = t.split(':').map(Number);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 || 12;
+
+    modalContent.innerHTML = `
+        <div style="padding: 5px;">
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 30px;">
+                <button onclick="showSettingsModal()" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; width: 36px; height: 36px; color: #fff; cursor: pointer; font-size: 1rem; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                    <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M7 1L1 7l6 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <div>
+                    <h3 style="margin: 0; color: #fff; font-size: 1rem;">Adjust Time</h3>
+                    <p style="margin: 2px 0 0; font-size: 0.75rem; color: var(--text-secondary);">${icons[win]} ${win} reminder window</p>
+                </div>
+            </div>
+
+            <div style="text-align: center; margin: 40px 0;">
+                <div style="font-size: 0.65rem; color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 20px;">Reminder Time</div>
+                <div style="display: flex; justify-content: center; align-items: center; gap: 24px;">
+                    <button onclick="stepTime('${win}', -30)" style="background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1); border-radius: 50%; width: 56px; height: 56px; color: #fff; cursor: pointer; font-size: 1.4rem; display:flex; align-items:center; justify-content:center;">−</button>
+                    <div style="position: relative; cursor: pointer;" onclick="document.getElementById('n-adj-${win.toLowerCase()}').showPicker()">
+                        <div style="font-size: 3.5rem; font-weight: 800; letter-spacing: -2px; color: #fff; line-height:1;">${h12}:${m.toString().padStart(2,'0')}<span style="font-size: 1.4rem; color: var(--accent); margin-left: 6px; font-weight: 700;">${ampm}</span></div>
+                        <div style="font-size: 0.65rem; color: rgba(255,255,255,0.25); text-align: center; margin-top: 8px;">Tap to type exact time</div>
+                        <input type="time" id="n-adj-${win.toLowerCase()}" onchange="updateTime('${win}', this.value)" value="${t}" style="position:absolute; opacity:0; pointer-events:none; width:0; height:0;">
+                    </div>
+                    <button onclick="stepTime('${win}', 30)" style="background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1); border-radius: 50%; width: 56px; height: 56px; color: #fff; cursor: pointer; font-size: 1.4rem; display:flex; align-items:center; justify-content:center;">+</button>
+                </div>
+                <div style="font-size: 0.7rem; color: rgba(255,255,255,0.2); margin-top: 16px;">Steps in 30-minute increments</div>
+            </div>
+
+            <button onclick="showSettingsModal()" style="width: 100%; padding: 16px; background: var(--accent); border: none; border-radius: 14px; color: #000; font-weight: 700; font-size: 1rem; cursor: pointer; margin-top: 20px;" class="ripple">Done</button>
+        </div>
+    `;
+};
+
 window.stepTime = function(win, mins) {
-    const times = state.settings.notificationTimes || { Night: '04:00', Morning: '08:00', Afternoon: '13:00', Evening: '20:00' };
+    const defaultTimes = { Night: '04:00', Morning: '08:00', Afternoon: '13:00', Evening: '20:00' };
+    const times = { ...defaultTimes, ...state.settings.notificationTimes };
     let [h, m] = times[win].split(':').map(Number);
     // Snap to nearest 30-min then step
     let totalMins = h * 60 + m;
@@ -1169,7 +1386,11 @@ window.stepTime = function(win, mins) {
 window.toggleAlertTimesSection = function() {
     const section = document.getElementById('alert-times-section');
     const toggle = document.getElementById('s-notify');
-    if (section) section.style.display = toggle?.checked ? 'block' : 'none';
+    if (!toggle) return;
+    // Persist state immediately so sub-screen navigation preserves it
+    state.settings.notificationsEnabled = toggle.checked;
+    saveState();
+    if (section) section.style.display = toggle.checked ? 'block' : 'none';
 };
 
 window.togglePeptideRemindersInMenu = function(i) {
@@ -1334,8 +1555,8 @@ window.showEditDoseModal = function(id) {
             </div>
             
             <div style="display: flex; flex-direction: column; gap: 10px;">
-                <button onclick="closeModal(); renderPage(state.currentPage);" style="width: 100%; padding: 16px; background: var(--accent-cyan); border: none; border-radius: 14px; color: #000; font-weight: 800; font-size: 1rem; cursor: pointer;" class="ripple">Synchronize Log</button>
-                <button onclick="closeModal()" style="width: 100%; padding: 14px; background: rgba(255,255,255,0.05); border: none; border-radius: 14px; color: #fff; font-weight: 600; font-size: 0.9rem; cursor: pointer;" class="ripple">Cancel Changes</button>
+                <button onclick="closeModal(); renderPage(state.currentPage);" style="width: 100%; padding: 16px; background: var(--accent); border: none; border-radius: 14px; color: #000; font-weight: 800; font-size: 1rem; cursor: pointer;" class="ripple">Save Changes</button>
+                <button onclick="closeModal()" style="width: 100%; padding: 14px; background: rgba(255,255,255,0.05); border: none; border-radius: 14px; color: #fff; font-weight: 600; font-size: 0.9rem; cursor: pointer;" class="ripple">Cancel</button>
             </div>
         </div>
     `;
